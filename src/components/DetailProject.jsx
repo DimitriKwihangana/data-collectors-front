@@ -246,7 +246,7 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
     setSubmittingRatings(prev => ({ ...prev, [memberId]: true }));
 
     try {
-      const response = await fetch('https://databankvanguard-b3d326c04ab4.herokuapp.com/col/rating/', {
+      const response = await fetch('hhttps://databankvanguard-b3d326c04ab4.herokuapp.com/col/rating/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

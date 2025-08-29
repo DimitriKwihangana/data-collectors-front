@@ -36,7 +36,7 @@ function App() {
         
         <div className="bg-gray-800 text-white text-center py-8 px-4">
           <h1 className="text-3xl font-bold mb-2">Data Collector Managing System</h1>
-          <p className="text-sm opacity-80">Intelligent project assignment and performance tracking</p>
+          {/* <p className="text-sm opacity-80">Intelligent project assignment and performance tracking</p> */}
         </div>
 
         <div className="p-6 space-y-8">

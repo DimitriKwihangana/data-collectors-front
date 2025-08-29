@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { deleteTeamMember } from '../api/api';
 import UpdateCollectorModal from './UpdateCollectorModal';
 
+const API_BASE = 'https://databankvanguard-b3d326c04ab4.herokuapp.com'; // swap to prod base when ready
+
 const CollectorTable = ({ collectors, refresh, currentProject = null }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -11,39 +13,46 @@ const CollectorTable = ({ collectors, refresh, currentProject = null }) => {
   const [activeProjects, setActiveProjects] = useState([]);
   const [projectsLoading, setProjectsLoading] = useState(true);
 
+  const normalizeRole = (role) => {
+    if (!role) return '';
+    const r = String(role).trim().toLowerCase().replace(/[-\s]/g, '_');
+    const map = {
+      data_collector: 'data_collector',
+      collector: 'data_collector',
+      supervisor: 'supervisor',
+      backchecker: 'backchecker',
+      back_checker: 'backchecker',
+    };
+    return map[r] || r;
+  };
+
   // Fetch active projects on component mount
   useEffect(() => {
     const fetchActiveProjects = async () => {
       try {
         setProjectsLoading(true);
-        const response = await fetch('https://databankvanguard-b3d326c04ab4.herokuapp.com/col/assign-project/');
-        
-        if (response.ok) {
-          const projectsData = await response.json();
-          
-          // Extract active project names from the response structure
-          const active = [];
-          if (projectsData.active_projects) {
-            Object.keys(projectsData.active_projects).forEach(projectKey => {
-              const project = projectsData.active_projects[projectKey];
-              if (project.project_info) {
-                // Add project if it has active status or if all projects in active_projects are considered active
-                const projectName = project.project_info.name || projectKey;
-                const status = project.project_info.status;
-                
-                // Include if status is 'active' or if status is null/undefined (assuming they're active by being in active_projects)
-                if (status === 'active' ) {
-                  active.push(projectName);
-                }
-              }
-            });
-          }
-          
-          setActiveProjects(active);
-        } else {
+        // FIX: use the active-projects endpoint
+        const response = await fetch(`${API_BASE}/col/get-project/`);
+        if (!response.ok) {
           console.error('Failed to fetch projects:', response.statusText);
           setActiveProjects([]);
+          return;
         }
+        const projectsData = await response.json();
+
+        const active = [];
+        // FIX: read active_projects and check status
+        if (projectsData.active_projects) {
+          for (const [projectKey, projectVal] of Object.entries(projectsData.active_projects)) {
+            const info = projectVal?.project_info || {};
+            const status = (info.status || '').toLowerCase();
+            if (status === 'active') {
+              // store the project key/name as used by assigned_projects in member objects
+              active.push(info.name || projectKey);
+            }
+          }
+        }
+        setActiveProjects(active);
       } catch (error) {
         console.error('Error fetching projects:', error);
         setActiveProjects([]);
@@ -67,30 +76,47 @@ const CollectorTable = ({ collectors, refresh, currentProject = null }) => {
       alert('❗ No project selected.');
       return;
     }
-
     const confirm = window.confirm(`Assign ${collector.name} to "${currentProject}"?`);
     if (!confirm) return;
 
     try {
-      // Use the project assignment API endpoint instead of direct member update
-      const response = await fetch(`https://databankvanguard-b3d326c04ab4.herokuapp.com/col/assign-project/`, {
+      // NOTE: The current backend /col/assign-project/ assigns by requested counts,
+      // not a specific person. To assign a specific member, you’ll need a dedicated
+      // endpoint (e.g., POST /col/assign-member/ { member_id, project_name }).
+      // For now, we’ll call the bulk endpoint with 1 collector and let the backend pick.
+      // TODO (backend): add support for preferred_member_ids=[id]
+      const response = await fetch(`${API_BASE}/col/assign-project/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           projectName: currentProject,
-          numCollectors: 1,
-          specificMembers: [collector.id] // Optional: specify which member to assign
+          name: '(unchanged)',           // scrum master if needed by backend; or remove if optional
+          startDate: '2099-01-01',       // harmless placeholders if backend requires on update;
+          endDate: '2099-12-31',         // ideally backend should allow partial update for assignment
+          status: 'active',
+          // FIX: correct param name expected by backend
+          num_data_collectors: 1,
+          num_supervisors: 0,
+          num_backcheckers: 0,
+          // preferred_member_ids: [collector.id], // <-- add when backend supports this
         }),
       });
 
       if (response.ok) {
         const result = await response.json();
-        alert(`✅ ${collector.name} assigned to "${currentProject}"`);
+        // Heads up: backend may not pick THIS collector until preferred_member_ids is supported
+        alert(`✅ Assignment request sent for "${currentProject}".`);
         refresh();
       } else {
         const errorData = await response.json();
         console.error('Assignment failed:', errorData);
-        alert(`❌ Failed to assign member: ${errorData.message || 'Unknown error'}`);
+        alert(
+          `❌ Failed to assign member: ${
+            errorData.message ||
+            errorData.detail ||
+            'Unknown error'
+          }`
+        );
       }
     } catch (err) {
       console.error('Assignment error:', err);
@@ -100,7 +126,7 @@ const CollectorTable = ({ collectors, refresh, currentProject = null }) => {
 
   const handleUpdate = async (updatedData) => {
     try {
-      const response = await fetch(`https://databankvanguard-b3d326c04ab4.herokuapp.com/col/teammembers/${updatedData.id}/`, {
+      const response = await fetch(`${API_BASE}/col/teammembers/${updatedData.id}/`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedData),
@@ -122,14 +148,16 @@ const CollectorTable = ({ collectors, refresh, currentProject = null }) => {
 
   const getFilteredCollectors = () => {
     const collectorsArray = Array.isArray(collectors) ? collectors : (collectors?.data || []);
-    
+
+    const safeIncludes = (value, q) => (value || '').toLowerCase().includes((q || '').toLowerCase());
+
     return collectorsArray.filter((c) => {
-      const experience = getExperienceLevel(c.projects_count);
+      const normalizedRole = normalizeRole(c.role);
+      const experience = getExperienceLabel(c.projects_count);
       return (
-        (c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          c.ve_code.toLowerCase().includes(searchTerm.toLowerCase())) &&
+        (safeIncludes(c.name, searchTerm) || safeIncludes(c.ve_code, searchTerm)) &&
         (statusFilter === '' || c.status === statusFilter) &&
-        (roleFilter === '' || c.role === roleFilter)
+        (roleFilter === '' || normalizedRole === roleFilter)
       );
     });
   };
@@ -142,20 +170,18 @@ const CollectorTable = ({ collectors, refresh, currentProject = null }) => {
     if (!projects || !Array.isArray(projects) || projects.length === 0) {
       return <span className="text-gray-400 italic">None</span>;
     }
-    
+
     // Filter assigned projects to only show active ones
-    const activeAssignedProjects = projects.filter(project => 
-      activeProjects.includes(project)
-    );
+    const activeAssignedProjects = projects.filter(project => activeProjects.includes(project));
 
     if (activeAssignedProjects.length === 0) {
       return <span className="text-gray-400 italic">No active projects</span>;
     }
-    
+
     if (activeAssignedProjects.length === 1) {
       return <span className="text-gray-900">{activeAssignedProjects[0]}</span>;
     }
-    
+
     return (
       <div className="space-y-1">
         {activeAssignedProjects.map((project, index) => (
@@ -196,15 +222,16 @@ const CollectorTable = ({ collectors, refresh, currentProject = null }) => {
           <option value="deployed">Deployed</option>
         </select>
 
+        {/* FIX: canonical lowercase role values to match backend */}
         <select
           value={roleFilter}
           onChange={(e) => setRoleFilter(e.target.value)}
           className="border rounded px-3 py-2"
         >
           <option value="">All Roles</option>
-          <option value="Supervisor">Supervisor</option>
+          <option value="supervisor">Supervisor</option>
           <option value="data_collector">Data Collector</option>
-          <option value="Backchecker">Backchecker</option>
+          <option value="backchecker">Backchecker</option>
         </select>
       </div>
 
@@ -223,8 +250,9 @@ const CollectorTable = ({ collectors, refresh, currentProject = null }) => {
           </thead>
           <tbody>
             {filteredCollectors.map((c) => {
-              const experience = getExperienceLevel(c.projects_count);
+              const experience = getExperienceLabel(c.projects_count);
               const isAvailable = c.status === 'available';
+              const normalizedRole = normalizeRole(c.role);
 
               return (
                 <tr
@@ -235,17 +263,19 @@ const CollectorTable = ({ collectors, refresh, currentProject = null }) => {
                     setIsModalOpen(true);
                   }}
                 >
-                  <td className="px-4 py-2">{c.ve_code}</td>
+                  <td className="px-4 py-2">{c.ve_code || '—'}</td>
                   <td className="px-4 py-2 text-blue-600 hover:underline cursor-pointer">{c.name}</td>
-                  <td className="px-4 py-2">{c.role}</td>
+                  <td className="px-4 py-2 capitalize">
+                    {normalizedRole.replace('_', ' ')}
+                  </td>
                   <td className="px-4 py-2">{c.projects_count}</td>
                   <td className="px-4 py-2">
                     <span className={`inline-block px-2 py-1 text-xs rounded-full ${getExperienceLevelClass(experience)}`}>
                       {experience}
                     </span>
                   </td>
-                  <td className="px-4 py-2">{c.performance_score || 'N/A'}</td>
-                  <td className="px-4 py-2">{c.rotation_rank || 'N/A'}</td>
+                  <td className="px-4 py-2">{c.performance_score ?? 'N/A'}</td>
+                  <td className="px-4 py-2">{c.rotation_rank ?? 'N/A'}</td>
                   <td className="px-4 py-2">
                     <span className={`inline-block px-2 py-1 text-xs rounded-full ${isAvailable ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
                       {c.status}
@@ -312,11 +342,13 @@ const CollectorTable = ({ collectors, refresh, currentProject = null }) => {
   );
 };
 
-const getExperienceLevel = (projects) => {
-  if (projects <= 2) return 'data_collector';
-  if (projects === 3) return 'Regular';
-  if (projects === 4) return 'Backchecker';
-  if (projects === 5) return 'Moderator';
+// Keep experience levels purely as a display heuristic (not roles)
+const getExperienceLabel = (projects) => {
+  const n = Number(projects) || 0;
+  if (n <= 2) return 'Beginner';
+  if (n === 3) return 'Regular';
+  if (n === 4) return 'Backchecker';
+  if (n === 5) return 'Moderator';
   return 'Supervisor';
 };
 
@@ -326,7 +358,7 @@ const getExperienceLevelClass = (level) => {
     case 'Moderator': return 'bg-indigo-100 text-indigo-700';
     case 'Regular': return 'bg-blue-100 text-blue-700';
     case 'Backchecker': return 'bg-yellow-100 text-yellow-700';
-    case 'data_collector': return 'bg-green-100 text-green-700';
+    case 'Beginner': return 'bg-green-100 text-green-700';
     default: return 'bg-gray-100 text-gray-700';
   }
 };
