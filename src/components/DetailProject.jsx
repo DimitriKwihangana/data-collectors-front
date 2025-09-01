@@ -476,21 +476,7 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
         </span>
       </div>
 
-      {/* Project Info */}
-      <div className="bg-gray-50 p-3 rounded-lg mb-4">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-          <div><span className="font-medium">Scrum Master:</span> {project.scrumMaster}</div>
-          <div><span className="font-medium">Progress:</span> {staffedPercent()}% staffed</div>
-          <div><span className="font-medium">Data Collectors:</span> {project.totalCollectors}/{project.numCollectorsNeeded}</div>
-          <div><span className="font-medium">Supervisors:</span> {project.totalSupervisors}/{project.numSupervisorsNeeded}</div>
-          <div><span className="font-medium">Backcheckers:</span> {project.totalBackcheckers}/{project.numBackcheckersNeeded || 0}</div>
-        </div>
-        {totalNeeded > 0 && (
-          <div className="mt-1 text-[11px] text-gray-600">
-            Total assigned: {project.totalCollectors + project.totalSupervisors + project.totalBackcheckers} / {totalNeeded}
-          </div>
-        )}
-      </div>
+      
 
       {/* Tabs */}
       <div className="mb-4">
