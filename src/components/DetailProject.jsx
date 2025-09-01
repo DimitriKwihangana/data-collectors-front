@@ -8,33 +8,46 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [submittingRatings, setSubmittingRatings] = useState({});
-  const [theid, settheId] = useState(null);
-  const [activeTab, setActiveTab] = useState('to-rate'); // 'to-rate' or 'rated'
+  const [theid, setTheId] = useState(null);
+  const [activeTab, setActiveTab] = useState('to-rate'); // 'to-rate' | 'rated'
   const [ratedMembers, setRatedMembers] = useState([]);
   const [unratedMembers, setUnratedMembers] = useState([]);
   const [tabLoading, setTabLoading] = useState(false);
   const [allRatings, setAllRatings] = useState([]);
 
-  console.log(theid);
+  // ---- role helpers ----
+  const normalizeRole = (role) => {
+    if (!role) return '';
+    const r = String(role).trim().toLowerCase().replace(/[-\s]/g, '_');
+    const map = {
+      data_collector: 'data_collector',
+      collector: 'data_collector',
+      supervisor: 'supervisor',
+      backchecker: 'backchecker',
+      back_checker: 'backchecker',
+    };
+    return map[r] || r;
+  };
+
+  const labelForRole = (r) =>
+    r === 'data_collector' ? 'Data Collector' : r === 'supervisor' ? 'Supervisor' : r === 'backchecker' ? 'Backchecker' : r;
 
   useEffect(() => {
-    if (projectId) {
-      fetchProjectDetails();
-    }
+    if (projectId) fetchProjectDetails();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   useEffect(() => {
     if (teamMembers.length > 0 && theid) {
       fetchRatingsAndSeparateMembers();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamMembers, theid, activeTab]);
 
   const fetchProjectDetails = async () => {
     setLoading(true);
     setError(null);
-    
     try {
-      // Fetch project and team members data
       const [projectsResponse, teamMembersResponse] = await Promise.all([
         fetch('https://databankvanguard-b3d326c04ab4.herokuapp.com/col/get-project/'),
         fetch('https://databankvanguard-b3d326c04ab4.herokuapp.com/col/teammembers/')
@@ -46,165 +59,136 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
 
       const projectsData = await projectsResponse.json();
       const teamMembersData = await teamMembersResponse.json();
+      const allTeamMembersData = teamMembersData.data || [];
 
-      // Store all team members for later reference
-      setAllTeamMembers(teamMembersData.data || []);
+      setAllTeamMembers(allTeamMembersData);
 
-      // Find the specific project
       if (projectsData.active_projects && projectsData.active_projects[projectId]) {
         const projectData = projectsData.active_projects[projectId];
+        setTheId(projectData.project_info.id);
 
-        settheId(projectData.project_info.id);
-        const allTeamMembersData = teamMembersData.data || [];
-
-        // Process project data
-        const processedProject = processProjectData(projectId, projectData, allTeamMembersData);
-        setProject(processedProject);
-        setTeamMembers(processedProject.members);
+        const processed = processProjectData(projectId, projectData, allTeamMembersData);
+        setProject(processed);
+        setTeamMembers(processed.members);
       } else {
         throw new Error('Project not found');
       }
-    } catch (error) {
-      console.error("Failed to fetch project details:", error);
-      setError(error.message);
+    } catch (err) {
+      console.error('Failed to fetch project details:', err);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const processProjectData = (projectName, projectData, allTeamMembers) => {
-    // Create a map of team members by name for easy lookup
-    const teamMemberMap = new Map();
-    allTeamMembers.forEach(member => {
-      teamMemberMap.set(member.name?.trim(), member);
-    });
+  const processProjectData = (projectName, projectData, allTeam) => {
+    // Map for quick augmentation by name
+    const byName = new Map();
+    (allTeam || []).forEach((m) => byName.set((m.name || '').trim(), m));
 
-    // Get data collectors from project data and match with full team member data
-    const dataCollectorsFromProject = (projectData.data_collectors || []).map(member => {
-      const fullMemberData = teamMemberMap.get(member.name?.trim());
+    const augment = (member, role) => {
+      const full = byName.get((member.name || '').trim());
       return {
-        ...member,
-        ...fullMemberData, // This will include the numeric ID
-        role: 'data_collector',
-        ve_code: member.ve_code || fullMemberData?.ve_code || 'N/A'
+        ...full,             // bring in numeric id, etc.
+        ...member,           // keep fields from project payload
+        role,                // normalized role
+        ve_code: member.ve_code || full?.ve_code || 'N/A',
+        name: member.name || full?.name || 'Unknown'
       };
-    });
+    };
 
-    // Get supervisors from project data and match with full team member data
-    const supervisorsFromProject = (projectData.supervisors || []).map(member => {
-      const fullMemberData = teamMemberMap.get(member.name?.trim());
-      return {
-        ...member,
-        ...fullMemberData, // This will include the numeric ID
-        role: 'supervisor',
-        ve_code: member.ve_code || fullMemberData?.ve_code || 'N/A'
-      };
-    });
+    // From project payload
+    const dcsFromProject = (projectData.data_collectors || []).map((m) => augment(m, 'data_collector'));
+    const supsFromProject = (projectData.supervisors || []).map((m) => augment(m, 'supervisor'));
+    const backsFromProject = (projectData.backcheckers || []).map((m) => augment(m, 'backchecker'));
 
-    // Get team members assigned to this project
-    const assignedDataCollectors = allTeamMembers.filter(member => 
-      member.assigned_projects && 
-      member.assigned_projects.includes(projectName) &&
-      member.role?.toLowerCase() === 'data_collector'
-    );
-
-    const assignedSupervisors = allTeamMembers.filter(member => 
-      member.assigned_projects && 
-      member.assigned_projects.includes(projectName) &&
-      member.role?.toLowerCase() === 'supervisor'
-    );
-
-    // Combine all members, avoiding duplicates
-    const allDataCollectors = [
-      ...dataCollectorsFromProject,
-      ...assignedDataCollectors.filter(assigned => 
-        !dataCollectorsFromProject.some(existing => 
-          existing.name?.trim() === assigned.name?.trim()
+    // From team API (assigned_projects includes this project)
+    const assignedByRole = (roleKey) =>
+      (allTeam || [])
+        .filter((m) =>
+          Array.isArray(m.assigned_projects) &&
+          m.assigned_projects.includes(projectName) &&
+          normalizeRole(m.role) === roleKey
         )
+        .map((m) => ({ ...m, role: roleKey }));
+
+    const dcsAssigned = assignedByRole('data_collector');
+    const supsAssigned = assignedByRole('supervisor');
+    const backsAssigned = assignedByRole('backchecker');
+
+    // Deduplicate within each role by name
+    const dedupe = (primary, extras) => [
+      ...primary,
+      ...extras.filter(
+        (x) => !primary.some((y) => (y.name || '').trim() === (x.name || '').trim())
       )
     ];
 
-    const allSupervisors = [
-      ...supervisorsFromProject,
-      ...assignedSupervisors.filter(assigned => 
-        !supervisorsFromProject.some(existing => 
-          existing.name?.trim() === assigned.name?.trim()
-        )
-      )
-    ];
+    const allDCs = dedupe(dcsFromProject, dcsAssigned);
+    const allSUPs = dedupe(supsFromProject, supsAssigned);
+    const allBACKs = dedupe(backsFromProject, backsAssigned);
 
-    const allMembers = [...allDataCollectors, ...allSupervisors];
+    const info = projectData.project_info || {};
+    const members = [...allDCs, ...allSUPs, ...allBACKs];
 
     return {
       id: projectName,
-      name: projectData.project_info.name,
-      scrumMaster: projectData.project_info.scrum_master || 'Not specified',
-      startDate: projectData.project_info.start_date,
-      endDate: projectData.project_info.end_date,
-      durationDays: projectData.project_info.duration_days,
-      status: projectData.project_info.status || 'Unknown',
-      numCollectorsNeeded: projectData.project_info.collectors_needed || 0,
-      numSupervisorsNeeded: projectData.project_info.supervisors_needed || 0,
-      totalCollectors: allDataCollectors.length,
-      totalSupervisors: allSupervisors.length,
-      members: allMembers,
-      memberCount: allMembers.length,
-      dataCollectors: allDataCollectors,
-      supervisors: allSupervisors
+      name: info.name || projectName,
+      scrumMaster: info.scrum_master || 'Not specified',
+      startDate: info.start_date,
+      endDate: info.end_date,
+      durationDays: info.duration_days,
+      status: info.status || 'Unknown',
+      numCollectorsNeeded: info.collectors_needed || 0,
+      numSupervisorsNeeded: info.supervisors_needed || 0,
+      numBackcheckersNeeded: info.backcheckers_needed || 0, // present if you added this field
+      totalCollectors: allDCs.length,
+      totalSupervisors: allSUPs.length,
+      totalBackcheckers: allBACKs.length,
+      members,
+      memberCount: members.length,
+      dataCollectors: allDCs,
+      supervisors: allSUPs,
+      backcheckers: allBACKs
     };
   };
 
   const fetchRatingsAndSeparateMembers = async () => {
     if (!theid) return;
-    
     setTabLoading(true);
     try {
-      // Fetch all ratings
-      const ratingsResponse = await fetch('https://databankvanguard-b3d326c04ab4.herokuapp.com/col/rating/');
-      
-      if (ratingsResponse.ok) {
-        const allRatingsData = await ratingsResponse.json();
-        setAllRatings(allRatingsData);
-        
-        // Filter ratings for this specific project
-        const projectRatings = allRatingsData.filter(rating => rating.project === theid);
-        
-        // Create a set of team member IDs who have been rated for this project
-        const ratedMemberIds = new Set(projectRatings.map(rating => rating.team_member));
-        
-        // Separate team members into rated and unrated based on their IDs
-        const unrated = teamMembers.filter(member => !ratedMemberIds.has(member.id));
-        const rated = projectRatings.map(rating => {
-          // Find the team member details from allTeamMembers
-          const teamMember = allTeamMembers.find(member => member.id === rating.team_member);
-          return {
-            ...rating,
-            memberDetails: teamMember || { name: 'Unknown Member', id: rating.team_member }
-          };
+      const res = await fetch('https://databankvanguard-b3d326c04ab4.herokuapp.com/col/rating/');
+      if (res.ok) {
+        const arr = await res.json(); // expecting an array
+        setAllRatings(arr);
+
+        const projectRatings = arr.filter((r) => r.project === theid);
+        const ratedIds = new Set(projectRatings.map((r) => r.team_member));
+
+        const unrated = teamMembers.filter((m) => !ratedIds.has(m.id));
+        const rated = projectRatings.map((r) => {
+          const tm = allTeamMembers.find((m) => m.id === r.team_member);
+          return { ...r, memberDetails: tm || { name: 'Unknown Member', id: r.team_member } };
         });
-        
+
         setUnratedMembers(unrated);
         setRatedMembers(rated);
-        
-        // Create ratings map for form handling
-        const ratingsMap = {};
-        projectRatings.forEach(rating => {
-          ratingsMap[rating.team_member] = {
-            rating: rating.rating,
-            feedback: rating.feedback || ''
-          };
+
+        const map = {};
+        projectRatings.forEach((r) => {
+          map[r.team_member] = { rating: r.rating, feedback: r.feedback || '' };
         });
-        setRatings(ratingsMap);
+        setRatings(map);
       }
-    } catch (error) {
-      console.error("Failed to fetch ratings:", error);
+    } catch (e) {
+      console.error('Failed to fetch ratings:', e);
     } finally {
       setTabLoading(false);
     }
   };
 
   const handleRatingChange = (memberId, field, value) => {
-    setRatings(prev => ({
+    setRatings((prev) => ({
       ...prev,
       [memberId]: {
         ...prev[memberId],
@@ -214,99 +198,104 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
   };
 
   const submitRating = async (member) => {
-    // ONLY use the numeric ID - no name fallbacks
-    const memberId = member.id; // Always numeric ID only
+    const memberId = member.id; // numeric id only
     const ratingData = ratings[memberId];
-    
-    // ✅ Guard against missing project ID
+
     if (!theid) {
-      alert("Project ID is not yet ready. Please wait a moment.");
+      alert('Project ID is not yet ready. Please wait a moment.');
       return;
     }
-
-    // ✅ Guard against empty rating + feedback
     if (!ratingData || (!ratingData.rating && !ratingData.feedback)) {
       alert('Please provide a rating or feedback before submitting.');
       return;
     }
-
-    // ✅ Validate rating is not more than 12
     if (ratingData.rating && ratingData.rating > 12) {
       alert('Rating cannot be more than 12.');
       return;
     }
 
     const body = {
-      team_member: memberId, 
+      team_member: memberId,
       project: theid,
       rating: ratingData.rating || null,
       feedback: ratingData.feedback || ''
     };
 
-    setSubmittingRatings(prev => ({ ...prev, [memberId]: true }));
-
+    setSubmittingRatings((p) => ({ ...p, [memberId]: true }));
     try {
-      const response = await fetch('hhttps://databankvanguard-b3d326c04ab4.herokuapp.com/col/rating/', {
+      const response = await fetch('https://databankvanguard-b3d326c04ab4.herokuapp.com/col/rating/', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
 
       if (response.ok) {
         alert(`✅ Rating submitted successfully for ${member.name}!`);
-        // Refresh the members by rating status to update both tabs
         await fetchRatingsAndSeparateMembers();
-        // Clear the local rating state for this member
-        setRatings(prev => {
-          const newRatings = { ...prev };
-          delete newRatings[memberId];
-          return newRatings;
+        setRatings((prev) => {
+          const copy = { ...prev };
+          delete copy[memberId];
+          return copy;
         });
       } else {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to submit rating');
+        const err = await response.json();
+        throw new Error(err.message || 'Failed to submit rating');
       }
-    } catch (error) {
-      console.error("Failed to submit rating:-----------------------", error);
+    } catch (e) {
+      console.error('Failed to submit rating:', e);
       alert('Failed to submit rating. Please try again.');
     } finally {
-      setSubmittingRatings(prev => ({ ...prev, [memberId]: false }));
+      setSubmittingRatings((p) => ({ ...p, [memberId]: false }));
     }
   };
 
   const formatStatus = (status) => {
     const statusColors = {
-      'active': 'bg-green-100 text-green-800',
-      'upcoming': 'bg-blue-100 text-blue-800',
-      'completed': 'bg-gray-100 text-gray-800',
+      active: 'bg-green-100 text-green-800',
+      upcoming: 'bg-blue-100 text-blue-800',
+      completed: 'bg-gray-100 text-gray-800',
       'on-hold': 'bg-yellow-100 text-yellow-800',
-      'planning': 'bg-purple-100 text-purple-800'
+      planning: 'bg-purple-100 text-purple-800'
     };
-    return statusColors[status?.toLowerCase()] || 'bg-gray-100 text-gray-800';
+    return statusColors[(status || '').toLowerCase()] || 'bg-gray-100 text-gray-800';
+  };
+
+  const staffedPercent = () => {
+    if (!project) return 0;
+    const assigned =
+      (project.totalCollectors || 0) +
+      (project.totalSupervisors || 0) +
+      (project.totalBackcheckers || 0);
+    const needed =
+      (project.numCollectorsNeeded || 0) +
+      (project.numSupervisorsNeeded || 0) +
+      (project.numBackcheckersNeeded || 0);
+    if (!needed) return 0;
+    return Math.min(100, Math.round((assigned / needed) * 100));
   };
 
   const renderUnratedMemberCard = (member, index) => {
-    const memberId = member.id; // ONLY use numeric ID
+    const memberId = member.id;
     const memberRating = ratings[memberId] || { rating: '', feedback: '' };
     const isSubmitting = submittingRatings[memberId];
+
+    const roleColorDot =
+      member.role === 'supervisor' ? 'bg-green-500'
+        : member.role === 'backchecker' ? 'bg-yellow-500'
+        : 'bg-blue-500';
 
     return (
       <div key={index} className="p-3 hover:bg-gray-50">
         <div className="flex flex-col lg:flex-row lg:items-center gap-3">
-          {/* Compact Member Info */}
           <div className="lg:w-1/3 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                member.role === 'supervisor' ? 'bg-green-500' : 'bg-blue-500'
-              }`}></div>
+              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${roleColorDot}`}></div>
               <h4 className="font-medium text-gray-800 text-sm truncate">{member.name}</h4>
               <span className="text-xs text-gray-500">#{member.id}</span>
             </div>
             <div className="text-xs text-gray-600 space-y-0.5">
               <div className="flex gap-3">
-                <span><strong>Role:</strong> {member.role === 'data_collector' ? 'Data Collector' : 'Supervisor'}</span>
+                <span><strong>Role:</strong> {labelForRole(member.role)}</span>
                 {member.ve_code && <span><strong>VE:</strong> {member.ve_code}</span>}
               </div>
               {(member.experience_level || member.status) && (
@@ -318,13 +307,9 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
             </div>
           </div>
 
-          {/* Rating Section */}
           <div className="lg:w-2/3 flex flex-col sm:flex-row gap-3">
-            {/* Number Rating Input */}
             <div className="flex-shrink-0">
-              <label className="block text-xs font-medium text-gray-700 mb-1">
-                Rating (1-12)
-              </label>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Rating (1-12)</label>
               <input
                 type="number"
                 min="1"
@@ -342,7 +327,6 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
               />
             </div>
 
-            {/* Feedback and Submit */}
             <div className="flex-1 flex gap-2">
               <div className="flex-1">
                 <label className="block text-xs font-medium text-gray-700 mb-1">Feedback</label>
@@ -363,9 +347,7 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
                 >
                   {isSubmitting ? (
                     <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
-                  ) : (
-                    '💾'
-                  )}
+                  ) : '💾'}
                 </button>
               </div>
             </div>
@@ -376,26 +358,25 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
   };
 
   const renderRatedMemberCard = (ratingData, index) => {
-    const member = ratingData.memberDetails;
-    
+    const member = ratingData.memberDetails || {};
+    const roleColorDot =
+      normalizeRole(member.role) === 'supervisor' ? 'bg-green-500'
+        : normalizeRole(member.role) === 'backchecker' ? 'bg-yellow-500'
+        : 'bg-blue-500';
+
     return (
       <div key={index} className="p-3 hover:bg-gray-50">
         <div className="flex flex-col lg:flex-row lg:items-center gap-3">
-          {/* Compact Member Info */}
           <div className="lg:w-1/3 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                member.role === 'supervisor' ? 'bg-green-500' : 'bg-blue-500'
-              }`}></div>
+              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${roleColorDot}`}></div>
               <h4 className="font-medium text-gray-800 text-sm truncate">{member.name}</h4>
               <span className="text-xs text-gray-500">#{member.id}</span>
-              <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full">
-                ✓ Rated
-              </span>
+              <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full">✓ Rated</span>
             </div>
             <div className="text-xs text-gray-600 space-y-0.5">
               <div className="flex gap-3">
-                <span><strong>Role:</strong> {member.role === 'data_collector' ? 'Data Collector' : 'Supervisor'}</span>
+                <span><strong>Role:</strong> {labelForRole(normalizeRole(member.role))}</span>
                 {member.ve_code && <span><strong>VE:</strong> {member.ve_code}</span>}
               </div>
               {(member.experience_level || member.status) && (
@@ -407,19 +388,13 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
             </div>
           </div>
 
-          {/* Rating Display */}
           <div className="lg:w-2/3 flex flex-col sm:flex-row gap-3">
-            {/* Rating Display */}
             <div className="flex-shrink-0">
-              <label className="block text-xs font-medium text-gray-700 mb-1">
-                Rating
-              </label>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Rating</label>
               <div className="w-20 p-2 bg-gray-100 border border-gray-300 rounded text-xs text-center font-medium">
                 {ratingData.rating || 'N/A'}
               </div>
             </div>
-
-            {/* Feedback Display */}
             <div className="flex-1">
               <label className="block text-xs font-medium text-gray-700 mb-1">Feedback</label>
               <div className="w-full p-2 bg-gray-100 border border-gray-300 rounded text-xs min-h-[2.5rem] overflow-auto">
@@ -450,10 +425,7 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
           <div className="text-red-500 text-lg mb-2">❌</div>
           <div className="text-lg font-medium text-gray-600 mb-2">Error Loading Project</div>
           <div className="text-sm text-gray-500 mb-4">{error}</div>
-          <button 
-            onClick={onBack}
-            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-          >
+          <button onClick={onBack} className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
             ← Back to Projects
           </button>
         </div>
@@ -468,10 +440,7 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
           <div className="text-gray-400 text-lg mb-2">📂</div>
           <div className="text-lg font-medium text-gray-600 mb-2">Project Not Found</div>
           <div className="text-sm text-gray-500 mb-4">The requested project could not be found.</div>
-          <button 
-            onClick={onBack}
-            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-          >
+          <button onClick={onBack} className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
             ← Back to Projects
           </button>
         </div>
@@ -479,9 +448,14 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
     );
   }
 
+  const totalNeeded =
+    (project.numCollectorsNeeded || 0) +
+    (project.numSupervisorsNeeded || 0) +
+    (project.numBackcheckersNeeded || 0);
+
   return (
     <div className="bg-white p-4 rounded-xl shadow max-w-full">
-      {/* Compact Header */}
+      {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <button
@@ -492,7 +466,9 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
           </button>
           <div>
             <h1 className="text-lg font-bold text-gray-800">📊 {project.name} - Rate Team</h1>
-            <p className="text-xs text-gray-600">{project.memberCount} members • {project.durationDays} days</p>
+            <p className="text-xs text-gray-600">
+              {project.memberCount} members • {project.durationDays} days
+            </p>
           </div>
         </div>
         <span className={`text-xs font-medium px-2 py-1 rounded capitalize ${formatStatus(project.status)}`}>
@@ -500,17 +476,23 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
         </span>
       </div>
 
-      {/* Compact Project Info */}
+      {/* Project Info */}
       <div className="bg-gray-50 p-3 rounded-lg mb-4">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
           <div><span className="font-medium">Scrum Master:</span> {project.scrumMaster}</div>
-          <div><span className="font-medium">Progress:</span> {((project.totalCollectors + project.totalSupervisors) / (project.numCollectorsNeeded + project.numSupervisorsNeeded) * 100).toFixed(0)}% staffed</div>
+          <div><span className="font-medium">Progress:</span> {staffedPercent()}% staffed</div>
           <div><span className="font-medium">Data Collectors:</span> {project.totalCollectors}/{project.numCollectorsNeeded}</div>
           <div><span className="font-medium">Supervisors:</span> {project.totalSupervisors}/{project.numSupervisorsNeeded}</div>
+          <div><span className="font-medium">Backcheckers:</span> {project.totalBackcheckers}/{project.numBackcheckersNeeded || 0}</div>
         </div>
+        {totalNeeded > 0 && (
+          <div className="mt-1 text-[11px] text-gray-600">
+            Total assigned: {project.totalCollectors + project.totalSupervisors + project.totalBackcheckers} / {totalNeeded}
+          </div>
+        )}
       </div>
 
-      {/* Tab Navigation */}
+      {/* Tabs */}
       <div className="mb-4">
         <div className="flex border-b border-gray-200">
           <button
@@ -553,7 +535,7 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
                     {unratedMembers.length} remaining
                   </span>
                 </h3>
-                
+
                 {unratedMembers.length === 0 ? (
                   <div className="text-center py-6 bg-green-50 rounded-lg border border-green-200">
                     <div className="text-green-600 text-lg mb-2">🎉</div>
@@ -578,7 +560,7 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
                     {ratedMembers.length} completed
                   </span>
                 </h3>
-                
+
                 {ratedMembers.length === 0 ? (
                   <div className="text-center py-6">
                     <div className="text-gray-400 text-lg mb-2">📝</div>
@@ -598,12 +580,19 @@ const ProjectDetailPage = ({ projectId, onBack }) => {
         )}
       </div>
 
-      {/* Compact Summary */}
+      {/* Summary */}
       {teamMembers.length > 0 && !tabLoading && (
         <div className="mt-4 bg-blue-50 p-3 rounded-lg">
           <div className="flex justify-between items-center text-xs text-blue-700">
-            <span>Progress: {ratedMembers.length} / {teamMembers.length} rated ({teamMembers.length > 0 ? ((ratedMembers.length / teamMembers.length) * 100).toFixed(0) : 0}%)</span>
-            <span>DC: {teamMembers.filter(m => m.role === 'data_collector').length} | SUP: {teamMembers.filter(m => m.role === 'supervisor').length}</span>
+            <span>
+              Progress: {ratedMembers.length} / {teamMembers.length} rated (
+              {teamMembers.length > 0 ? ((ratedMembers.length / teamMembers.length) * 100).toFixed(0) : 0}%)
+            </span>
+            <span>
+              DC: {teamMembers.filter((m) => normalizeRole(m.role) === 'data_collector').length} |
+              SUP: {teamMembers.filter((m) => normalizeRole(m.role) === 'supervisor').length} |
+              BACK: {teamMembers.filter((m) => normalizeRole(m.role) === 'backchecker').length}
+            </span>
           </div>
         </div>
       )}
