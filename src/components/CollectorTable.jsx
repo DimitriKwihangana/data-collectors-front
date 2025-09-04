@@ -160,7 +160,7 @@ const CollectorTable = ({ collectors, refresh, currentProject = null }) => {
   return (
     <div className="bg-white p-6 rounded-xl shadow">
       <div className="flex items-end justify-between gap-4 mb-4">
-        <h2 className="text-xl font-semibold text-gray-800">Team Members</h2>
+        <h2 className="text-xl font-semibold text-[#087abc]">Team Members</h2>
 
         {/* Local project selector (only shows if parent didn't pass one) */}
         {!currentProject && (

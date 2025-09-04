@@ -1,7 +1,7 @@
 // src/components/ProjectsManager.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 
-const API_BASE = 'https://databankvanguard-b3d326c04ab4.herokuapp.com'; // change to your base
+const API_BASE = 'https://databankvanguard-b3d326c04ab4.herokuapp.com';
 
 const normalizeRole = (role) => {
   if (!role) return '';
@@ -20,32 +20,28 @@ const ProjectsManager = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [endingId, setEndingId] = useState(null);
-  const [projectsActive, setProjectsActive] = useState([]);      // from /col/get-project/
-  const [projectsAll, setProjectsAll] = useState(null);          // from optional /col/projects/
+  const [projectsActive, setProjectsActive] = useState({});
+  const [projectsAll, setProjectsAll] = useState(null);
   const [error, setError] = useState(null);
-  const [editTargets, setEditTargets] = useState({});            // projectName -> { collectors, supervisors, backcheckers? }
-  const [bulkCounts, setBulkCounts] = useState({});              // quick-add counts per project
+  const [editTargets, setEditTargets] = useState({});
+  const [bulkCounts, setBulkCounts] = useState({});
 
   const fetchAll = async () => {
     setLoading(true);
     setError(null);
     try {
-      // Always fetch active
+      // Active only
       const activeRes = await fetch(`${API_BASE}/col/get-project/`);
       if (!activeRes.ok) throw new Error(`Active projects failed: ${activeRes.status}`);
       const activeJson = await activeRes.json();
       setProjectsActive(activeJson.active_projects || {});
 
-      // Try to fetch an “all” endpoint (optional — if you haven't added it, this just fails silently)
-      try {
-        const allRes = await fetch(`${API_BASE}/col/projects/`);
-        if (allRes.ok) {
-          const allJson = await allRes.json();
-          setProjectsAll(allJson.projects || null);
-        } else {
-          setProjectsAll(null);
-        }
-      } catch {
+      // All statuses
+      const allRes = await fetch(`${API_BASE}/col/projects/`);
+      if (allRes.ok) {
+        const allJson = await allRes.json();
+        setProjectsAll(allJson.projects || {});
+      } else {
         setProjectsAll(null);
       }
     } catch (e) {
@@ -80,7 +76,7 @@ const ProjectsManager = () => {
         duration_days: info.duration_days,
         need_collectors: info.collectors_needed || 0,
         need_supervisors: info.supervisors_needed || 0,
-        need_backcheckers: info.backcheckers_needed || 0, // appears when backend adds it
+        need_backcheckers: info.backcheckers_needed || 0,
         totals,
         members,
       };
@@ -92,13 +88,9 @@ const ProjectsManager = () => {
   }, [projectsActive]);
 
   const completedProjects = useMemo(() => {
-    // If you have /col/projects/ returning all (active + completed + others)
-    if (projectsAll) {
-      const arr = listFromMap(projectsAll);
-      return arr.filter(p => (p.status || '').toLowerCase() === 'completed');
-    }
-    // Otherwise, we don’t have visibility; show empty and hint
-    return [];
+    if (!projectsAll) return [];
+    const arr = listFromMap(projectsAll);
+    return arr.filter(p => (p.status || '').toLowerCase() === 'completed');
   }, [projectsAll]);
 
   const staffedPercent = (p) => {
@@ -124,7 +116,6 @@ const ProjectsManager = () => {
 
   const saveTargets = async (project) => {
     const t = editTargets[project.id] || {};
-    // Build a body compatible with AssignProjectView (it updates project targets safely)
     const body = {
       projectName: project.id,
       name: project.scrum_master || '(unchanged)',
@@ -133,7 +124,6 @@ const ProjectsManager = () => {
       status: project.status || 'active',
       num_data_collectors: t.collectors ?? project.need_collectors,
       num_supervisors: t.supervisors ?? project.need_supervisors,
-      // Include backcheckers if your backend supports it
       num_backcheckers: t.backcheckers ?? project.need_backcheckers ?? 0,
     };
 
@@ -161,7 +151,6 @@ const ProjectsManager = () => {
     const dc = b.collectors || 0;
     const sv = b.supervisors || 0;
     const bc = b.backcheckers || 0;
-
     if (dc + sv + bc === 0) {
       alert('Enter at least one count to assign.');
       return;
@@ -217,6 +206,28 @@ const ProjectsManager = () => {
     }
   };
 
+  const downloadProjectExcel = async (projectName) => {
+    try {
+      const res = await fetch(`${API_BASE}/col/projects/export/?project_name=${encodeURIComponent(projectName)}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || `Export failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const isXlsx = res.headers.get('Content-Type')?.includes('spreadsheet');
+      a.href = url;
+      a.download = `${projectName}_members.${isXlsx ? 'xlsx' : 'csv'}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(`❌ ${e.message}`);
+    }
+  };
+
   const Section = ({ title, hint, children }) => (
     <div className="bg-white p-5 rounded-xl shadow border">
       <div className="flex items-center justify-between mb-3">
@@ -246,7 +257,6 @@ const ProjectsManager = () => {
           </div>
         </div>
 
-        {/* Targets editor */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="bg-gray-50 p-3 rounded">
             <div className="text-sm font-medium text-gray-700 mb-2">Targets</div>
@@ -293,7 +303,6 @@ const ProjectsManager = () => {
             </div>
           </div>
 
-          {/* Quick bulk assign by counts (keeps your least-projects-first server logic) */}
           <div className="bg-gray-50 p-3 rounded">
             <div className="text-sm font-medium text-gray-700 mb-2">Quick Assign</div>
             <div className="grid grid-cols-3 gap-2">
@@ -328,13 +337,19 @@ const ProjectsManager = () => {
                 />
               </div>
             </div>
-            <div className="mt-3">
+            <div className="mt-3 flex gap-2">
               <button
                 onClick={() => bulkAssignByCounts(p)}
                 disabled={saving}
                 className="bg-indigo-600 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50"
               >
                 {saving ? 'Assigning…' : 'Assign by Counts'}
+              </button>
+              <button
+                onClick={() => downloadProjectExcel(p.name)}
+                className="bg-teal-600 text-white text-sm px-3 py-1.5 rounded hover:bg-teal-700"
+              >
+                ⬇️ Export Excel
               </button>
             </div>
           </div>
@@ -396,16 +411,20 @@ const ProjectsManager = () => {
         <div className="p-6 text-gray-500">Loading projects…</div>
       ) : (
         <>
-          <Section title="Active Projects">
+          <div className="bg-white p-5 rounded-xl shadow border">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-semibold text-gray-800">Active Projects</h3>
+            </div>
             {activeProjects.length === 0 ? (
               <div className="text-sm text-gray-500">No active projects.</div>
             ) : activeProjects.map((p) => <ProjectCard key={p.id} p={p} />)}
-          </Section>
+          </div>
 
-          <Section
-            title="Completed Projects"
-            hint={!projectsAll ? 'To show completed, expose GET /col/projects/ that returns all statuses.' : undefined}
-          >
+          <div className="bg-white p-5 rounded-xl shadow border">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-semibold text-gray-800">Completed Projects</h3>
+              {!projectsAll && <div className="text-xs text-gray-500">Expose GET /col/projects/ to see completed.</div>}
+            </div>
             {completedProjects.length === 0 ? (
               <div className="text-sm text-gray-500">No completed projects found.</div>
             ) : completedProjects.map((p) => (
@@ -413,13 +432,23 @@ const ProjectsManager = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-semibold">{p.name}</div>
-                    <div className="text-xs text-gray-500">{p.start_date || '—'} → {p.end_date || '—'} • {p.duration_days ?? '—'} days</div>
+                    <div className="text-xs text-gray-500">
+                      {p.start_date || '—'} → {p.end_date || '—'} • {p.duration_days ?? '—'} days
+                    </div>
                   </div>
-                  <span className="text-xs bg-gray-100 px-2 py-1 rounded">{p.status}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs bg-gray-100 px-2 py-1 rounded">{p.status}</span>
+                    <button
+                      onClick={() => downloadProjectExcel(p.name)}
+                      className="bg-teal-600 text-white text-xs px-3 py-1.5 rounded hover:bg-teal-700"
+                    >
+                      ⬇️ Export Excel
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
-          </Section>
+          </div>
         </>
       )}
     </div>
