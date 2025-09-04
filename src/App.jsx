@@ -11,7 +11,7 @@ import TeamMembersManager from './components/TeamMembersManager';
 
 function App() {
   const [collectors, setCollectors] = useState([]);
-  const [projects, setProjects] = useState([]); // you can populate if you like
+  const [projects, setProjects] = useState([]); 
   const [currentProject, setCurrentProject] = useState('');
   const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'projects' | 'members'
 
@@ -53,7 +53,7 @@ function App() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-100 to-gray-300">
       <div className=" bg-white shadow-xl overflow-hidden">
-        <div className="bg-gray-800 text-white text-center py-8 px-4">
+        <div className="bg-[#087abc] text-white text-center py-8 px-4">
           <h1 className="text-3xl font-bold mb-2">Data Collector Managing System</h1>
         </div>
 
