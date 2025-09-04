@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const API_BASE = 'http://127.0.0.1:8000';
+const API_BASE = 'https://databankvanguard-b3d326c04ab4.herokuapp.com';
 
 const CollectorTable = ({ collectors, refresh, currentProject = null }) => {
   const [searchTerm, setSearchTerm] = useState('');
